@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include <atomic>
 
 constexpr long long size = 100000000;
 
@@ -14,6 +15,26 @@ constexpr long long second = 50000000;
 constexpr long long third = 75000000;
 constexpr long long fourth = 100000000;
 std::mutex sum_mutex;
+
+class spinlock
+{
+private:
+    std::atomic_flag flag;
+
+public:
+    spinlock() : flag(ATOMIC_FLAG_INIT) {}
+    void lock()
+    {
+        while (flag.test_and_set(std::memory_order_acquire))
+            ;
+    }
+    void unlock()
+    {
+        flag.clear(std::memory_order_release);
+    }
+};
+
+spinlock sp_lock;
 
 void my_sum(unsigned long long &sum,
             const std::vector<int> &vec,
@@ -54,6 +75,21 @@ void my_sum_promise(std::promise<unsigned long long> &&prom,
     prom.set_value(tmp_sum);
 }
 
+void my_sum_spinlock(unsigned long long &sum,
+                     const std::vector<int> &vec,
+                     unsigned long long beg,
+                     unsigned long long end)
+{
+    unsigned long long tmp_sum = 0;
+    for (auto i = beg; i < end; ++i)
+    {
+        tmp_sum += vec[i];
+    }
+    sp_lock.lock();
+    sum += tmp_sum;
+    sp_lock.unlock();
+}
+
 int main()
 {
     std::cout
@@ -90,7 +126,7 @@ int main()
 
     std::cout << "Result: " << sum << std::endl;
 
-    // 2.1 multi-threads - raw threads
+    // 2.1 multi-threads - raw threads with mutex
     const auto sta_1 = std::chrono::steady_clock::now();
     unsigned long long sum_1 = 0;
 
@@ -108,7 +144,7 @@ int main()
         std::chrono::steady_clock::now() - sta_1;
 
     std::cout
-        << "Time for multi-threads - raw threads: "
+        << "Time for multi-threads - raw threads with mutex: "
         << dur_1.count()
         << " seconds"
         << std::endl;
@@ -171,6 +207,31 @@ int main()
         << " seconds"
         << std::endl;
     std::cout << "Result: " << sum_3 << std::endl;
+
+    // 2.4 multi-threads - raw threads with spinlock
+    const auto sta_4 = std::chrono::steady_clock::now();
+    unsigned long long sum_4 = 0;
+
+    std::thread t_sp_1(my_sum_spinlock, std::ref(sum_4), std::cref(random_values), 0, first);
+    std::thread t_sp_2(my_sum_spinlock, std::ref(sum_4), std::cref(random_values), first, second);
+    std::thread t_sp_3(my_sum_spinlock, std::ref(sum_4), std::cref(random_values), second, third);
+    std::thread t_sp_4(my_sum_spinlock, std::ref(sum_4), std::cref(random_values), third, fourth);
+
+    t_sp_1.join();
+    t_sp_2.join();
+    t_sp_3.join();
+    t_sp_4.join();
+
+    const std::chrono::duration<double> dur_4 =
+        std::chrono::steady_clock::now() - sta_4;
+
+    std::cout
+        << "Time for multi-threads - raw threads with spinlock: "
+        << dur_4.count()
+        << " seconds"
+        << std::endl;
+
+    std::cout << "Result: " << sum_4 << std::endl;
 
     return 0;
 }
